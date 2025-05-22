@@ -63,8 +63,9 @@ use wayland_protocols::xdg::decoration::zv1::client::{
 };
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 use wayland_protocols_plasma::blur::client::{org_kde_kwin_blur, org_kde_kwin_blur_manager};
-use xkbcommon::xkb::ffi::XKB_KEYMAP_FORMAT_TEXT_V1;
-use xkbcommon::xkb::{self, KEYMAP_COMPILE_NO_FLAGS, Keycode};
+use xkbcommon::xkb::{
+    self, KEYMAP_COMPILE_NO_FLAGS, Keycode, State, ffi::XKB_KEYMAP_FORMAT_TEXT_V1,
+};
 
 use super::{
     display::WaylandDisplay,
@@ -214,7 +215,7 @@ pub(crate) struct WaylandClientState {
     outputs: HashMap<ObjectId, Output>,
     in_progress_outputs: HashMap<ObjectId, InProgressOutput>,
     keyboard_layout: LinuxKeyboardLayout,
-    keyboard_state: Option<KeyboardState>,
+    keymap_state: Option<State>,
     compose_state: Option<xkb::compose::State>,
     drag: DragState,
     click: ClickState,
@@ -573,7 +574,7 @@ impl WaylandClient {
             windows: HashMap::default(),
             common,
             keyboard_layout: LinuxKeyboardLayout::new(UNKNOWN_KEYBOARD_LAYOUT_NAME),
-            keyboard_state: None,
+            keymap_state: None,
             compose_state: None,
             drag: DragState {
                 data_offer: None,
@@ -1211,7 +1212,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                     .flatten()
                     .expect("Failed to create keymap")
                 };
-                state.keyboard_state = Some(KeyboardState::new(xkb::State::new(&keymap)));
+                state.keymap_state = Some(xkb::State::new(&keymap));
                 state.compose_state = get_xkb_compose_state(&xkb_context);
                 drop(state);
 
@@ -1252,20 +1253,12 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
             } => {
                 let focused_window = state.keyboard_focused_window.clone();
 
-                let keyboard_state = state.keyboard_state.as_mut().unwrap();
-                let old_layout = keyboard_state
-                    .state
-                    .serialize_layout(xkbcommon::xkb::STATE_LAYOUT_EFFECTIVE);
-                keyboard_state.state.update_mask(
-                    mods_depressed,
-                    mods_latched,
-                    mods_locked,
-                    0,
-                    0,
-                    group,
-                );
-                state.modifiers = Modifiers::from_xkb(&keyboard_state.state);
-                state.capslock = Capslock::from_xkb(&keyboard_state.state);
+                let keymap_state = state.keymap_state.as_mut().unwrap();
+                let old_layout =
+                    keymap_state.serialize_layout(xkbcommon::xkb::STATE_LAYOUT_EFFECTIVE);
+                keymap_state.update_mask(mods_depressed, mods_latched, mods_locked, 0, 0, group);
+                state.modifiers = Modifiers::from_xkb(&keymap_state);
+                state.capslock = Capslock::from_xkb(&keymap_state);
                 let keymap_state = state.keymap_state.as_mut().unwrap();
 
                 let input = PlatformInput::ModifiersChanged(ModifiersChangedEvent {
@@ -1296,14 +1289,14 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                 };
                 let focused_window = focused_window.clone();
 
-                let keyboard_state = state.keyboard_state.as_ref().unwrap();
+                let keymap_state = state.keymap_state.as_ref().unwrap();
                 let keycode = Keycode::from(key + MIN_KEYCODE);
-                let keysym = keyboard_state.state.key_get_one_sym(keycode);
+                let keysym = keymap_state.key_get_one_sym(keycode);
 
                 match key_state {
                     wl_keyboard::KeyState::Pressed if !keysym.is_modifier_key() => {
                         let mut keystroke =
-                            Keystroke::from_xkb(&keyboard_state, state.modifiers, keycode);
+                            Keystroke::from_xkb(&keymap_state, state.modifiers, keycode);
                         println!("Wayland Before {:#?}", keystroke);
                         if let Some(mut compose) = state.compose_state.take() {
                             compose.feed(keysym);
@@ -1390,11 +1383,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                     }
                     wl_keyboard::KeyState::Released if !keysym.is_modifier_key() => {
                         let input = PlatformInput::KeyUp(KeyUpEvent {
-                            keystroke: Keystroke::from_xkb(
-                                keyboard_state,
-                                state.modifiers,
-                                keycode,
-                            ),
+                            keystroke: Keystroke::from_xkb(keymap_state, state.modifiers, keycode),
                         });
 
                         if state.repeat.current_keycode == Some(keycode) {
