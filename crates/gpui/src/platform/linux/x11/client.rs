@@ -1126,6 +1126,7 @@ impl X11Client {
                     }
                     keystroke
                 };
+                println!("\nX11 Key released: {:#?}", keystroke);
                 drop(state);
                 window.handle_input(PlatformInput::KeyUp(crate::KeyUpEvent { keystroke }));
             }
