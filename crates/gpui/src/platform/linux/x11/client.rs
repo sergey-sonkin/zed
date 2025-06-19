@@ -1,9 +1,3 @@
-use crate::{
-    
-    LinuxKeyboardMapper, platform::{Capslock, scap_screen_capture::scap_screen_sources},
-    underlying_dead_key,
-,
-};
 use core::str;
 use std::{
     cell::RefCell,
@@ -44,7 +38,7 @@ use x11rb::{
 };
 use xim::{AttributeName, Client, InputStyle, x11rb::X11rbClient};
 use xkbc::x11::ffi::{XKB_X11_MIN_MAJOR_XKB_VERSION, XKB_X11_MIN_MINOR_XKB_VERSION};
-use xkbcommon::xkb::{self as xkbc, LayoutIndex, ModMask, STATE_LAYOUT_EFFECTIVE, State};
+use xkbcommon::xkb::{self as xkbc, LayoutIndex, ModMask, STATE_LAYOUT_EFFECTIVE};
 
 use super::{
     ButtonOrScroll, ScrollDirection, X11Display, X11WindowStatePtr, XcbAtoms, XimCallbackEvent,
@@ -55,7 +49,7 @@ use super::{
 };
 
 use crate::platform::{
-    LinuxCommon, PlatformWindow,
+    Capslock, LinuxCommon, PlatformWindow,
     blade::BladeContext,
     linux::{
         DEFAULT_CURSOR_ICON_NAME, LinuxClient, get_xkb_compose_state, is_within_click_distance,
@@ -68,10 +62,10 @@ use crate::platform::{
 };
 use crate::{
     AnyWindowHandle, Bounds, ClipboardItem, CursorStyle, DisplayId, FileDropEvent, Keystroke,
-    LinuxKeyboardLayout, Modifiers, ModifiersChangedEvent, MouseButton, Pixels, Platform,
-    PlatformDisplay, PlatformInput, PlatformKeyboardLayout, Point, RequestFrameOptions,
-    ScaledPixels, ScreenCaptureSource, ScrollDelta, Size, TouchPhase, WindowParams, X11Window,
-    modifiers_from_xinput_info, point, px,
+    LinuxKeyboardLayout, LinuxKeyboardMapper, Modifiers, ModifiersChangedEvent, MouseButton,
+    Pixels, Platform, PlatformDisplay, PlatformInput, PlatformKeyboardLayout, Point,
+    RequestFrameOptions, ScaledPixels, ScreenCaptureSource, ScrollDelta, Size, TouchPhase,
+    WindowParams, X11Window, modifiers_from_xinput_info, point, px, underlying_dead_key,
 };
 
 /// Value for DeviceId parameters which selects all devices.
@@ -204,12 +198,11 @@ pub struct X11ClientState {
     pub(crate) windows: HashMap<xproto::Window, WindowRef>,
     pub(crate) mouse_focused_window: Option<xproto::Window>,
     pub(crate) keyboard_focused_window: Option<xproto::Window>,
-    pub(crate) xkb: State,
+    pub(crate) xkb: xkbc::State,
     previous_xkb_state: XKBStateNotiy,
     keyboard_layout: LinuxKeyboardLayout,
-    pub(crate) keyboard_layout: Box<LinuxKeyboardLayout>,
-    pub(crate) keyboard_mapper: Rc<LinuxKeyboardMapper>,
-    pub(crate) keyboard_mapper_cache: HashMap<String, Rc<LinuxKeyboardMapper>>,
+    keyboard_mapper: Rc<LinuxKeyboardMapper>,
+    keyboard_mapper_cache: HashMap<String, Rc<LinuxKeyboardMapper>>,
     pub(crate) ximc: Option<X11rbClient<Rc<XCBConnection>>>,
     pub(crate) xim_handler: Option<XimHandler>,
     pub modifiers: Modifiers,
@@ -429,7 +422,6 @@ impl X11Client {
             .layout_get_name(layout_idx)
             .to_string();
         let keyboard_layout = LinuxKeyboardLayout::new(layout_name.into());
-        let keyboard_layout = Box::new(LinuxKeyboardLayout::new(&xkb_state));
         let keyboard_mapper = Rc::new(LinuxKeyboardMapper::new(0, 0, 0));
         let keyboard_mapper_cache = HashMap::default();
 
@@ -983,17 +975,9 @@ impl X11Client {
                     latched_layout,
                     locked_layout,
                 };
-                let keyboard_layout = LinuxKeyboardLayout::new(&xkb_state);
                 state.xkb = xkb_state;
                 drop(state);
-                self.handle_keyboard_layout_change();
-                update_keyboard_mapper(
-                    &mut state,
-                    keyboard_layout,
-                    depressed_layout,
-                    latched_layout,
-                    locked_layout,
-                );
+                self.handle_keyboard_layout_change(depressed_layout, latched_layout, locked_layout);
             }
             Event::XkbStateNotify(event) => {
                 let mut state = self.0.borrow_mut();
@@ -1016,8 +1000,8 @@ impl X11Client {
                     locked_layout: locked_group,
                 };
 
-                let modifiers = Modifiers::from_xkb(&state.keyboard_state.state);
-                let capslock = Capslock::from_xkb(&state.keyboard_state.state);
+                let modifiers = Modifiers::from_xkb(&state.xkb);
+                let capslock = Capslock::from_xkb(&state.xkb);
                 if state.last_modifiers_changed_event == modifiers
                     && state.last_capslock_changed_event == capslock
                 {
@@ -1040,7 +1024,7 @@ impl X11Client {
                 }
 
                 if new_layout != old_layout {
-                    self.handle_keyboard_layout_change();
+                    self.handle_keyboard_layout_change(base_group, latched_group, locked_group);
                 }
             }
             Event::KeyPress(event) => {
@@ -1446,13 +1430,28 @@ impl X11Client {
         Some(())
     }
 
-    fn handle_keyboard_layout_change(&self) {
+    fn handle_keyboard_layout_change(
+        &self,
+        base_group: u32,
+        latched_group: u32,
+        locked_group: u32,
+    ) {
         let mut state = self.0.borrow_mut();
         let layout_idx = state.xkb.serialize_layout(STATE_LAYOUT_EFFECTIVE);
         let keymap = state.xkb.get_keymap();
         let layout_name = keymap.layout_get_name(layout_idx);
         if layout_name != state.keyboard_layout.name() {
             state.keyboard_layout = LinuxKeyboardLayout::new(layout_name.to_string().into());
+            let mapper = state
+                .keyboard_mapper_cache
+                .entry(layout_name.to_string())
+                .or_insert(Rc::new(LinuxKeyboardMapper::new(
+                    base_group,
+                    latched_group,
+                    locked_group,
+                )))
+                .clone();
+            state.keyboard_mapper = mapper;
             if let Some(mut callback) = state.common.callbacks.keyboard_layout_change.take() {
                 drop(state);
                 callback();
@@ -2298,26 +2297,4 @@ fn create_invisible_cursor(
 
     connection.flush()?;
     Ok(cursor)
-}
-
-fn update_keyboard_mapper(
-    client: &mut X11ClientState,
-    keyboard_layout: LinuxKeyboardLayout,
-    base_group: u32,
-    latched_group: u32,
-    locked_group: u32,
-) {
-    let id = keyboard_layout.id().to_string();
-    let mapper = client
-        .keyboard_mapper_cache
-        .entry(id)
-        .or_insert(Rc::new(LinuxKeyboardMapper::new(
-            base_group,
-            latched_group,
-            locked_group,
-        )))
-        .clone();
-
-    client.keyboard_mapper = mapper;
-    client.keyboard_layout = Box::new(keyboard_layout);
 }
