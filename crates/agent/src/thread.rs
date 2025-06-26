@@ -1535,13 +1535,28 @@ impl Thread {
                             Err(error) => {
                                 match error {
                                     LanguageModelCompletionError::RateLimitExceeded { retry_after } => {
-                                        anyhow::bail!(LanguageModelKnownError::RateLimitExceeded { retry_after });
+                                        let provider_name = if model.is_zed() {
+                                            None
+                                        } else {
+                                            Some(model.provider_name().0.as_ref())
+                                        };
+                                        anyhow::bail!(LanguageModelKnownError::rate_limit_exceeded(provider_name, retry_after));
                                     }
                                     LanguageModelCompletionError::Overloaded => {
-                                        anyhow::bail!(LanguageModelKnownError::Overloaded);
+                                        let provider_name = if model.is_zed() {
+                                            None
+                                        } else {
+                                            Some(model.provider_name().0.as_ref())
+                                        };
+                                        anyhow::bail!(LanguageModelKnownError::overloaded(provider_name));
                                     }
                                     LanguageModelCompletionError::ApiInternalServerError =>{
-                                        anyhow::bail!(LanguageModelKnownError::ApiInternalServerError);
+                                        let provider_name = if model.is_zed() {
+                                            None
+                                        } else {
+                                            Some(model.provider_name().0.as_ref())
+                                        };
+                                        anyhow::bail!(LanguageModelKnownError::api_internal_server_error(provider_name));
                                     }
                                     LanguageModelCompletionError::PromptTooLarge { tokens } => {
                                         let tokens = tokens.unwrap_or_else(|| {
@@ -1563,7 +1578,12 @@ impl Thread {
                                         anyhow::bail!(LanguageModelKnownError::UnknownResponseFormat(error));
                                     }
                                     LanguageModelCompletionError::HttpResponseError { status, ref body } => {
-                                        if let Some(known_error) = LanguageModelKnownError::from_http_response(status, body) {
+                                        let provider_name = if model.is_zed() {
+                                            None
+                                        } else {
+                                            Some(model.provider_name().0.as_ref())
+                                        };
+                                        if let Some(known_error) = LanguageModelKnownError::from_http_response(status, body, provider_name) {
                                             anyhow::bail!(known_error);
                                         } else {
                                             return Err(error.into());
@@ -1893,15 +1913,9 @@ impl Thread {
                                         });
                                         cx.notify();
                                     }
-                                    LanguageModelKnownError::RateLimitExceeded { retry_after } => {
-                                        let provider_name = model.provider_name();
-                                        let error_message = format!(
-                                            "{}'s API rate limit exceeded",
-                                            provider_name.0.as_ref()
-                                        );
-
+                                    LanguageModelKnownError::RateLimitExceeded(message, retry_after) => {
                                         thread.handle_rate_limit_error(
-                                            &error_message,
+                                            message,
                                             *retry_after,
                                             model.clone(),
                                             intent,
@@ -1910,15 +1924,9 @@ impl Thread {
                                         );
                                         retry_scheduled = true;
                                     }
-                                    LanguageModelKnownError::Overloaded => {
-                                        let provider_name = model.provider_name();
-                                        let error_message = format!(
-                                            "{}'s API servers are overloaded right now",
-                                            provider_name.0.as_ref()
-                                        );
-
+                                    LanguageModelKnownError::Overloaded(message) => {
                                         retry_scheduled = thread.handle_retryable_error(
-                                            &error_message,
+                                            message,
                                             model.clone(),
                                             intent,
                                             window,
@@ -1928,15 +1936,9 @@ impl Thread {
                                             emit_generic_error(error, cx);
                                         }
                                     }
-                                    LanguageModelKnownError::ApiInternalServerError => {
-                                        let provider_name = model.provider_name();
-                                        let error_message = format!(
-                                            "{}'s API server reported an internal server error",
-                                            provider_name.0.as_ref()
-                                        );
-
+                                    LanguageModelKnownError::ApiInternalServerError(message) => {
                                         retry_scheduled = thread.handle_retryable_error(
-                                            &error_message,
+                                            message,
                                             model.clone(),
                                             intent,
                                             window,
