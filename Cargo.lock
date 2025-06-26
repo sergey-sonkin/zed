@@ -8943,6 +8943,7 @@ dependencies = [
  "aws-credential-types",
  "aws_http_client",
  "bedrock",
+ "chrono",
  "client",
  "collections",
  "copilot",
