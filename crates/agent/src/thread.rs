@@ -1690,6 +1690,8 @@ impl Thread {
                                         CompletionRequestStatus::Failed {
                                             code, message, request_id
                                         } => {
+                                            // todo! This is where HTTP errors from cloud models actually get reported.
+                                            // Should add `retry_after` to failed and clarify upstream vs internal errors.
                                             anyhow::bail!("completion request failed. request_id: {request_id}, code: {code}, message: {message}");
                                         }
                                         CompletionRequestStatus::UsageUpdated {
@@ -4069,6 +4071,7 @@ fn main() {{
                 TestError::InternalServerError => {
                     LanguageModelCompletionError::ApiInternalServerError {
                         provider: self.provider_name(),
+                        message: "I'm a teapot orbiting the sun".to_string(),
                     }
                 }
             };
