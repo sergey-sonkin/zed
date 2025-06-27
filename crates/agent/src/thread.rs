@@ -1671,7 +1671,6 @@ impl Thread {
                                 );
                             }
                             LanguageModelCompletionEvent::StatusUpdate(status_update) => {
-                                // todo! Should this really ignore failures if the pending completion doesn't match?
                                 if let Some(completion) = thread
                                     .pending_completions
                                     .iter_mut()
@@ -1841,10 +1840,9 @@ impl Thread {
                             } else if let Some(completion_error) =
                                 error.downcast_ref::<LanguageModelCompletionError>()
                             {
+                                use LanguageModelCompletionError::*;
                                 match &completion_error {
-                                    LanguageModelCompletionError::PromptTooLarge {
-                                        tokens, ..
-                                    } => {
+                                    PromptTooLarge { tokens, .. } => {
                                         let tokens = tokens.unwrap_or_else(|| {
                                             // We didn't get an exact token count from the API, so fall back on our estimate.
                                             thread
@@ -1861,11 +1859,11 @@ impl Thread {
                                         });
                                         cx.notify();
                                     }
-                                    LanguageModelCompletionError::RateLimitExceeded {
+                                    RateLimitExceeded {
                                         retry_after: Some(retry_after),
                                         ..
                                     }
-                                    | LanguageModelCompletionError::ServerOverloaded {
+                                    | ServerOverloaded {
                                         retry_after: Some(retry_after),
                                         ..
                                     } => {
@@ -1879,8 +1877,7 @@ impl Thread {
                                         );
                                         retry_scheduled = true;
                                     }
-                                    LanguageModelCompletionError::RateLimitExceeded { .. }
-                                    | LanguageModelCompletionError::ServerOverloaded { .. } => {
+                                    RateLimitExceeded { .. } | ServerOverloaded { .. } => {
                                         retry_scheduled = thread.handle_retryable_error(
                                             &completion_error,
                                             model.clone(),
@@ -1892,9 +1889,9 @@ impl Thread {
                                             emit_generic_error(error, cx);
                                         }
                                     }
-                                    LanguageModelCompletionError::ApiInternalServerError {
-                                        ..
-                                    } => {
+                                    ApiInternalServerError { .. }
+                                    | ApiReadResponseError { .. }
+                                    | HttpSend { .. } => {
                                         retry_scheduled = thread.handle_retryable_error(
                                             &completion_error,
                                             model.clone(),
@@ -1906,7 +1903,16 @@ impl Thread {
                                             emit_generic_error(error, cx);
                                         }
                                     }
-                                    _ => emit_generic_error(error, cx),
+                                    NoApiKey { .. }
+                                    | HttpResponseError { .. }
+                                    | BadRequestFormat { .. }
+                                    | AuthenticationError { .. }
+                                    | PermissionError { .. }
+                                    | ApiEndpointNotFound { .. }
+                                    | SerializeRequest { .. }
+                                    | BuildRequestBody { .. }
+                                    | DeserializeResponse { .. }
+                                    | Other { .. } => emit_generic_error(error, cx),
                                 }
                             } else {
                                 emit_generic_error(error, cx);
