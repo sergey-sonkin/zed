@@ -28,10 +28,12 @@ test-support = [
 
 [dependencies]
 auto_update.workspace = true
+breadcrumbs.workspace = true
 call.workspace = true
 chrono.workspace = true
 client.workspace = true
 db.workspace = true
+editor.workspace = true
 gpui.workspace = true
 notifications.workspace = true
 project.workspace = true

@@ -16,6 +16,7 @@ use crate::application_menu::{
 };
 
 use auto_update::AutoUpdateStatus;
+use breadcrumbs::Breadcrumbs;
 use call::ActiveCall;
 use client::{Client, UserStore};
 use gpui::{
@@ -35,7 +36,7 @@ use ui::{
     IconWithIndicator, Indicator, PopoverMenu, Tooltip, h_flex, prelude::*,
 };
 use util::ResultExt;
-use workspace::{Workspace, notifications::NotifyResultExt};
+use workspace::{Workspace, notifications::NotifyResultExt, ToolbarItemView};
 use zed_actions::{OpenRecent, OpenRemote};
 
 pub use onboarding_banner::restore_banner;
@@ -115,6 +116,7 @@ pub struct TitleBar {
     client: Arc<Client>,
     workspace: WeakEntity<Workspace>,
     application_menu: Option<Entity<ApplicationMenu>>,
+    breadcrumbs: Entity<Breadcrumbs>,
     _subscriptions: Vec<Subscription>,
     banner: Entity<OnboardingBanner>,
 }
@@ -146,6 +148,15 @@ impl Render for TitleBar {
                                 .when(title_bar_settings.show_branch_name, |title_bar| {
                                     title_bar.children(self.render_project_branch(cx))
                                 })
+                                .child(
+                                    div()
+                                        .text_ui_sm(cx)
+                                        .child({
+                                            // Update breadcrumbs before rendering
+                                            self.update_breadcrumbs(window, cx);
+                                            self.breadcrumbs.clone()
+                                        })
+                                )
                         })
                 })
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -237,6 +248,7 @@ impl TitleBar {
         });
 
         let platform_titlebar = cx.new(|_| PlatformTitleBar::new(id));
+        let breadcrumbs = cx.new(|_| Breadcrumbs::new());
 
         Self {
             platform_titlebar,
@@ -245,6 +257,7 @@ impl TitleBar {
             project,
             user_store,
             client,
+            breadcrumbs,
             _subscriptions: subscriptions,
             banner,
         }
@@ -421,6 +434,7 @@ impl TitleBar {
             }))
     }
 
+
     pub fn render_project_branch(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let repository = self.project.read(cx).active_repository(cx)?;
         let workspace = self.workspace.upgrade()?;
@@ -492,6 +506,28 @@ impl TitleBar {
 
     fn active_call_changed(&mut self, cx: &mut Context<Self>) {
         cx.notify();
+    }
+
+    fn update_breadcrumbs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Update the breadcrumbs component with the current active item
+        if let Some(workspace) = self.workspace.upgrade() {
+            if let Some(active_item) = workspace.read(cx).active_item(cx) {
+                let active_item_ref = active_item.as_ref();
+                self.breadcrumbs.update(cx, |breadcrumbs, cx| {
+                    breadcrumbs.set_active_pane_item(Some(active_item_ref), window, cx)
+                });
+            } else {
+                // No active item, clear breadcrumbs
+                self.breadcrumbs.update(cx, |breadcrumbs, cx| {
+                    breadcrumbs.set_active_pane_item(None, window, cx)
+                });
+            }
+        } else {
+            // Workspace was dropped, clear breadcrumbs
+            self.breadcrumbs.update(cx, |breadcrumbs, cx| {
+                breadcrumbs.set_active_pane_item(None, window, cx)
+            });
+        }
     }
 
     fn share_project(&mut self, cx: &mut Context<Self>) {

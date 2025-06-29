@@ -16288,11 +16288,13 @@ name = "title_bar"
 version = "0.1.0"
 dependencies = [
  "auto_update",
+ "breadcrumbs",
  "call",
  "chrono",
  "client",
  "collections",
  "db",
+ "editor",
  "gpui",
  "http_client",
  "notifications",
