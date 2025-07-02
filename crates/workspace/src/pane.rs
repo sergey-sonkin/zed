@@ -3547,7 +3547,7 @@ impl Render for Pane {
                                 .v_flex()
                                 .size_full()
                                 .overflow_hidden()
-                                .child(self.toolbar.clone())
+                                // .child(self.toolbar.clone()) // Hidden: toolbar moved to title bar
                                 .child(item.to_any())
                         } else {
                             let placeholder = div
