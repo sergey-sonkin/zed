@@ -19,8 +19,10 @@ use auto_update::AutoUpdateStatus;
 use breadcrumbs::Breadcrumbs;
 use call::ActiveCall;
 use client::{Client, UserStore};
+use search::{BufferSearchBar, buffer_search};
+use editor::Editor;
 use gpui::{
-    Action, AnyElement, App, Context, Corner, Element, Entity, InteractiveElement, IntoElement,
+    Action, AnyElement, App, Context, Corner, Element, Entity, Focusable, InteractiveElement, IntoElement,
     MouseButton, ParentElement, Render, StatefulInteractiveElement, Styled, Subscription,
     WeakEntity, Window, actions, div,
 };
@@ -32,12 +34,12 @@ use std::sync::Arc;
 use theme::ActiveTheme;
 use title_bar_settings::TitleBarSettings;
 use ui::{
-    Avatar, Button, ButtonLike, ButtonStyle, ContextMenu, Icon, IconName, IconSize,
+    Avatar, Button, ButtonLike, ButtonStyle, ContextMenu, Icon, IconButton, IconName, IconSize,
     IconWithIndicator, Indicator, PopoverMenu, Tooltip, h_flex, prelude::*,
 };
 use util::ResultExt;
-use workspace::{Workspace, notifications::NotifyResultExt, ToolbarItemView};
-use zed_actions::{OpenRecent, OpenRemote};
+use workspace::{Workspace, notifications::NotifyResultExt, ToolbarItemView, Item};
+use zed_actions::{OpenRecent, OpenRemote, assistant::InlineAssist};
 
 pub use onboarding_banner::restore_banner;
 
@@ -164,6 +166,11 @@ impl Render for TitleBar {
         );
 
         children.push(self.render_collaborator_list(window, cx).into_any_element());
+
+        // Add toolbar items after collaborator list (right side, before sign-in)
+        if let Some(toolbar_items) = self.render_toolbar_items(cx) {
+            children.push(toolbar_items.into_any_element());
+        }
 
         if title_bar_settings.show_onboarding_banner {
             children.push(self.banner.clone().into_any_element())
@@ -434,6 +441,87 @@ impl TitleBar {
             }))
     }
 
+
+    fn render_toolbar_items(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        // Check if we have an active editor to show toolbar items for
+        if let Some(workspace) = self.workspace.upgrade() {
+            if let Some(active_item) = workspace.read(cx).active_item(cx) {
+                if let Some(editor) = active_item.downcast::<Editor>() {
+                    let focus_handle = editor.read(cx).focus_handle(cx);
+                    let is_singleton = editor.read(cx).is_singleton(cx);
+                    
+                    let mut toolbar_items = Vec::new();
+                    
+                    // Add search button for singleton editors (like regular files)
+                    if is_singleton {
+                        // Get the actual search bar state from the active pane's toolbar
+                        let active_pane = {
+                            let workspace_ref = workspace.read(cx);
+                            workspace_ref.active_pane().clone()
+                        };
+                        let is_search_active = active_pane.update(cx, |pane, cx| {
+                            pane.toolbar().update(cx, |toolbar, cx| {
+                                toolbar.item_of_type::<BufferSearchBar>()
+                                    .map(|search_bar| !search_bar.read(cx).is_dismissed())
+                                    .unwrap_or(false)
+                            })
+                        });
+                        
+                        let search_button = IconButton::new("title_search", IconName::MagnifyingGlass)
+                                .icon_size(IconSize::Small)
+                                .style(ButtonStyle::Subtle)
+                                .toggle_state(is_search_active) // Now properly reflects search state!
+                                .tooltip({
+                                    let focus_handle = focus_handle.clone();
+                                    move |window, cx| {
+                                        Tooltip::for_action_in(
+                                            "Buffer Search",
+                                            &buffer_search::Deploy::find(),
+                                            &focus_handle,
+                                            window,
+                                            cx,
+                                        )
+                                    }
+                                })
+                                .on_click({
+                                    let focus_handle = focus_handle.clone();
+                                    move |_, window, cx| {
+                                        // Dispatch the action directly to the focused editor
+                                        focus_handle.dispatch_action(&buffer_search::Deploy::find(), window, cx);
+                                    }
+                                });
+                        
+                        toolbar_items.push(search_button.into_any_element());
+                    }
+                    
+                    // Add Assistant button (ZedAssistant icon) - more commonly visible than code actions
+                    // This should match the logic from QuickActionBar
+                    // TODO: Import AgentSettings when we add the dependency
+                    let assistant_button = IconButton::new("title_assistant", IconName::ZedAssistant)
+                        .icon_size(IconSize::Small)
+                        .style(ButtonStyle::Subtle)
+                        .tooltip(Tooltip::text("Inline Assist"))
+                        .on_click({
+                            let focus_handle = focus_handle.clone();
+                            move |_, window, cx| {
+                                focus_handle.dispatch_action(&InlineAssist::default(), window, cx);
+                            }
+                        });
+                    
+                    toolbar_items.push(assistant_button.into_any_element());
+                    
+                    if !toolbar_items.is_empty() {
+                        return Some(
+                            h_flex()
+                                .gap_1()
+                                .children(toolbar_items)
+                        );
+                    }
+                }
+            }
+        }
+        None
+    }
 
     pub fn render_project_branch(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let repository = self.project.read(cx).active_repository(cx)?;

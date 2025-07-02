@@ -16303,6 +16303,7 @@ dependencies = [
  "remote",
  "rpc",
  "schemars",
+ "search",
  "serde",
  "settings",
  "smallvec",
